@@ -1,6 +1,18 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+
+    <!-- Google tag (gtag.js) -->
+    <script async src="https://www.googletagmanager.com/gtag/js?id=G-6J4R9DWHE6"></script>
+    <script>
+      window.dataLayer = window.dataLayer || [];
+      function gtag(){dataLayer.push(arguments);}
+      gtag('js', new Date());
+
+      gtag('config', 'G-6J4R9DWHE6');
+    </script>
+
+    <!-- rest of your existing PMT code -->
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TheFinPedia PMT</title>
@@ -8,6 +20,33 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- PostHog Analytics -->
+    <script src="https://us.i.posthog.com/static/array.js"></script>
+    <script>
+        /*
+         * POSTHOG SETUP
+         * Replace POSTHOG_API_KEY with the Project API Key from:
+         * PostHog -> Project Settings -> Project API Key
+         *
+         * If your PostHog project is hosted in the EU, change POSTHOG_HOST
+         * to: https://eu.i.posthog.com
+         */
+        const POSTHOG_API_KEY = "YOUR_POSTHOG_PROJECT_API_KEY";
+        const POSTHOG_HOST = "https://us.i.posthog.com";
+
+        window.posthog = window.posthog || [];
+        posthog.init(POSTHOG_API_KEY, {
+            api_host: POSTHOG_HOST,
+            person_profiles: "identified_only",
+            capture_pageview: true,
+            capture_pageleave: true,
+            autocapture: true,
+            session_recording: {
+                maskAllInputs: true
+            }
+        });
+    </script>
     <script>
         tailwind.config = {
             theme: {
@@ -129,7 +168,43 @@
 
         const SUPABASE_URL = "https://bihjtbekxldabrmxjbnp.supabase.co";
         const SUPABASE_ANON_KEY = "sb_publishable_OQI8S2FR6TD_S8Yql8g4gA_H7mdBOrj";
+
+        // IMPORTANT: PostHog only starts sending analytics after you replace
+        // YOUR_POSTHOG_PROJECT_API_KEY above with your real PostHog Project API Key.
         const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+        // ------------------------------------------------------------
+        // PostHog analytics
+        // ------------------------------------------------------------
+        function identifyPostHogUser(user) {
+            if (!window.posthog || !user) return;
+            const distinctId = user.authUserId || user.id || user.email;
+            if (!distinctId) return;
+
+            posthog.identify(String(distinctId), {
+                name: user.name || undefined,
+                email: user.email || undefined,
+                role: user.role || undefined,
+                department: user.dept || undefined
+            });
+        }
+
+        function trackPostHog(eventName, properties = {}) {
+            if (!window.posthog || typeof posthog.capture !== 'function') return;
+            try {
+                posthog.capture(eventName, properties);
+            } catch (e) {
+                console.warn('PostHog capture failed:', e);
+            }
+        }
+
+        function trackPageView(view, params = {}) {
+            trackPostHog('page_viewed', {
+                view,
+                ...params
+            });
+        }
+
 
         // Core fields (users, clients, campaigns, deliverables, stages, tasks) are
         // now loaded live from Supabase in loadAllData(). Richer nested fields this
@@ -467,6 +542,10 @@
         function getStage(id) { return DB.stages.find(s => s.id === id); }
         function getLatestSubmission(task) {
             return (task.submissions && task.submissions.length) ? task.submissions[task.submissions.length - 1] : null;
+        }
+
+        function getPOC(id) {
+            return DB.pocs.find(p => p.id === id) || null;
         }
 
         function logActivity(entityType, entityId, action, metadata = {}) {
@@ -1035,6 +1114,7 @@
         function navigateTo(view, params = {}) {
              try { localStorage.setItem('pmt_db_cache', JSON.stringify(DB)); } catch(e) {}
             AppState.currentView = view;
+            trackPageView(view, params);
             if (params.deliverableId) {
                 AppState.activeDeliverableId = params.deliverableId;
                 // Deliverable Detail's breadcrumb always needs a valid
@@ -1855,6 +1935,10 @@ async function submitDelayReason(reminderId) {
                                 <div><i class="fa-solid fa-user w-5 text-slate-400"></i> ${client.contact || 'No contact specified'}</div>
                                 <div><i class="fa-solid fa-envelope w-5 text-slate-400"></i> ${client.email || '-'}</div>
                                 <div><i class="fa-solid fa-phone w-5 text-slate-400"></i> ${client.phone || '-'}</div>
+                                ${(() => {
+                                    const clientPOCs = DB.pocs.filter(p => p.clientId === client.id && p.status === 'ACTIVE');
+                                    return clientPOCs.length ? `<div class="mt-3 pt-3 border-t border-slate-100"><div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Point of Contact</div>${clientPOCs.map(p => `<div class="mb-2"><div><i class="fa-solid fa-user-tie w-5 text-slate-400"></i><span class="font-semibold text-slate-700">${p.name}</span>${p.designation ? ` · ${p.designation}` : ''}</div>${p.email ? `<div class="ml-5 text-xs text-slate-500">${p.email}</div>` : ''}${p.phone ? `<div class="ml-5 text-xs text-slate-500">${p.phone}</div>` : ''}</div>`).join('')}</div>` : `<div><i class="fa-solid fa-user-tie w-5 text-slate-400"></i> No POC specified</div>`;
+                                })()}
                             </div>
                         </div>
                         <button onclick="openEditClientModal('${client.id}')" class="px-4 py-2 border border-slate-300 text-slate-700 rounded-lg text-sm font-bold hover:bg-slate-50 transition shadow-sm">Edit Details</button>
@@ -1980,7 +2064,6 @@ async function submitDelayReason(reminderId) {
                         .map(d => d.ownerId)
                         .filter(Boolean)
                 );
-                if (c.pocId) ids.add(c.pocId);
 
                 return [...ids].slice(0, 4).map(id => {
                     const u = getUser(id);
@@ -1994,16 +2077,36 @@ async function submitDelayReason(reminderId) {
                 }).join('') || '<span class="text-[10px] text-slate-300">No team</span>';
             };
 
-            const stageSummary = c => {
-                const ids = new Set(DB.deliverables.filter(d => d.campaignId === c.id).map(d => d.id));
-                const stages = DB.stages.filter(s => ids.has(s.deliverableId));
-                const depts = ['Content', 'Design', 'Animation'];
-                return depts.map(d => {
-                    const ss = stages.filter(s => s.dept === d);
-                    const done = ss.filter(s => s.status === 'COMPLETED').length;
-                    const color = d === 'Content' ? 'text-blue-600' : d === 'Design' ? 'text-violet-600' : 'text-amber-600';
-                    return `<span class="${color} whitespace-nowrap"><i class="fa-solid fa-circle text-[5px] mr-1"></i>${d} ${done}</span>`;
-                }).join(' <span class="text-slate-200 mx-1">•</span> ');
+            // Project-card progress is deliverable-driven:
+            // a stage box is shown only when the deliverable containing that
+            // stage is actually COMPLETED. Optional departments that do not
+            // exist for any completed deliverable are omitted entirely.
+            const getCompletedDeliverableStageSummary = c => {
+                const delivs = DB.deliverables.filter(d => d.campaignId === c.id);
+                const deptOrder = ['Content', 'Design', 'Animation', 'Finish'];
+                const getStageDept = s => ['Content', 'Design', 'Animation'].includes(s.dept) ? s.dept : 'Finish';
+
+                return deptOrder.map(dept => {
+                    const completedDeliverables = delivs.filter(d => {
+                        if (d.status !== 'COMPLETED') return false;
+                        return DB.stages.some(s =>
+                            s.deliverableId === d.id &&
+                            getStageDept(s) === dept
+                        );
+                    });
+
+                    if (!completedDeliverables.length) return null;
+
+                    const color = dept === 'Content'
+                        ? 'text-blue-600'
+                        : dept === 'Design'
+                            ? 'text-violet-600'
+                            : dept === 'Animation'
+                                ? 'text-amber-600'
+                                : 'text-emerald-600';
+
+                    return `<span class="${color} whitespace-nowrap"><i class="fa-solid fa-circle text-[5px] mr-1"></i>${dept} ${completedDeliverables.length}</span>`;
+                }).filter(Boolean).join(' <span class="text-slate-200 mx-1">•</span> ') || '<span class="text-slate-300">No completed deliverables</span>';
             };
 
             const card = (c, group) => {
@@ -2030,33 +2133,105 @@ async function submitDelayReason(reminderId) {
                                 <i class="fa-regular fa-building text-slate-400 w-3"></i>
                                 <span class="truncate">${getClient(c.clientId)?.name || 'Unknown client'}</span>
                             </div>
-                            ${c.pocId ? `<div class="flex items-center gap-1.5 truncate"><i class="fa-regular fa-user text-slate-400 w-3"></i><span class="truncate">${getUser(c.pocId).name || 'POC'}</span></div>` : ''}
+                            ${c.pocId ? (() => { const poc = getPOC(c.pocId); return poc ? `<div class="flex items-center gap-1.5 truncate"><i class="fa-regular fa-user text-slate-400 w-3"></i><span class="truncate">${poc.name}${poc.designation ? ' · ' + poc.designation : ''}</span></div>` : ''; })() : ''}
                         </div>
 
                         ${hasRework ? `<div class="mt-2 inline-flex items-center px-2 py-1 rounded-md border border-amber-200 bg-amber-50 text-[9px] font-bold text-amber-700"><i class="fa-solid fa-rotate-left mr-1"></i>In rework</div>` : ''}
 
                         ${(() => {
-                            const deliverableIds = new Set(DB.deliverables.filter(x => x.campaignId === c.id).map(x => x.id));
-                            const stages = DB.stages.filter(s => deliverableIds.has(s.deliverableId));
-                            const stageColor = dept => {
+                            const deliverables = DB.deliverables.filter(d => d.campaignId === c.id);
+                            const isProjectCompleted = c.status === 'COMPLETED';
+                            const deptOrder = ['Content', 'Design', 'Animation', 'Finish'];
+
+                            const getStageDept = stage =>
+                                ['Content', 'Design', 'Animation'].includes(stage.dept)
+                                    ? stage.dept
+                                    : 'Finish';
+
+                            const deptColor = dept => {
                                 if (dept === 'Content') return 'bg-blue-500';
                                 if (dept === 'Design') return 'bg-violet-500';
                                 if (dept === 'Animation') return 'bg-amber-500';
                                 return 'bg-emerald-500';
                             };
-                            const stageName = stage => {
-                                if (stage.dept) return stage.dept;
-                                return stage.name || 'Finish';
-                            };
-                            const deptCounts = ['Content', 'Design', 'Animation', 'Finish'].map(d => {
-                                const ss = stages.filter(s => d === 'Finish' ? (!['Content','Design','Animation'].includes(s.dept)) : s.dept === d);
-                                return { name: d, total: ss.length, done: ss.filter(s => s.status === 'COMPLETED').length, color: stageColor(d) };
-                            });
-                            const stageBlocks = stages.map(stage => `<span title="${stage.name || stage.dept || 'Stage'}" class="w-3 h-3 rounded-[3px] ${stageColor(stage.dept)} ${stage.status === 'COMPLETED' ? 'opacity-100' : 'opacity-90'}"></span>`).join('');
-                            const legend = deptCounts.map(x => `<span class="inline-flex items-center gap-1 text-[9px] font-semibold ${x.name === 'Content' ? 'text-blue-600' : x.name === 'Design' ? 'text-violet-600' : x.name === 'Animation' ? 'text-amber-600' : 'text-emerald-600'}"><span class="w-1.5 h-1.5 rounded-full ${x.color}"></span>${x.name} ${x.done}</span>`).join('');
+
+                            /*
+                             * IMPORTANT:
+                             * - A box represents an applicable stage of a COMPLETED Deliverable.
+                             * - If a Deliverable is not COMPLETED, none of its boxes appear,
+                             *   even if an individual stage is already completed.
+                             * - If a Deliverable type has no Animation/Finish stage, those boxes
+                             *   are never created and their legend entries are hidden.
+                             * - A COMPLETED Project makes every displayed box green.
+                             */
+                            const completedStageEntries = [];
+
+                            deliverables
+                                .filter(d => d.status === 'COMPLETED')
+                                .forEach(d => {
+                                    const seenDepts = new Set();
+
+                                    DB.stages
+                                        .filter(s => s.deliverableId === d.id)
+                                        .sort((a, b) => a.order - b.order)
+                                        .forEach(stage => {
+                                            const dept = getStageDept(stage);
+
+                                            // One box per applicable department for each completed Deliverable.
+                                            // This prevents duplicate boxes if a workflow has multiple stages
+                                            // belonging to the same department.
+                                            if (seenDepts.has(dept)) return;
+                                            seenDepts.add(dept);
+
+                                            completedStageEntries.push({
+                                                dept,
+                                                deliverable: d,
+                                                stage
+                                            });
+                                        });
+                                });
+
+                            const deptCounts = deptOrder
+                                .map(dept => ({
+                                    name: dept,
+                                    count: completedStageEntries.filter(x => x.dept === dept).length
+                                }))
+                                .filter(x => x.count > 0);
+
+                            const stageBlocks = completedStageEntries.map(entry => {
+                                const boxColor = isProjectCompleted
+                                    ? 'bg-emerald-500'
+                                    : deptColor(entry.dept);
+
+                                return `<span
+                                    title="${entry.deliverable.name} · ${entry.stage.name || entry.stage.dept || 'Finish'}"
+                                    class="w-3 h-3 rounded-[3px] ${boxColor} shrink-0"
+                                ></span>`;
+                            }).join('');
+
+                            const legend = deptCounts.map(x => {
+                                const textColor = x.name === 'Content'
+                                    ? 'text-blue-600'
+                                    : x.name === 'Design'
+                                        ? 'text-violet-600'
+                                        : x.name === 'Animation'
+                                            ? 'text-amber-600'
+                                            : 'text-emerald-600';
+
+                                const dotColor = deptColor(x.name);
+
+                                return `<span class="inline-flex items-center gap-1 text-[9px] font-semibold ${textColor}">
+                                    <span class="w-1.5 h-1.5 rounded-full ${dotColor}"></span>${x.name} ${x.count}
+                                </span>`;
+                            }).join('');
+
                             return `<div class="mt-4">
-                                <div class="flex items-center gap-1.5 min-h-[14px]">${stageBlocks || '<span class="text-[9px] text-slate-300">No stages</span>'}</div>
-                                <div class="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">${legend}</div>
+                                <div class="flex items-center gap-1.5 min-h-[14px]">
+                                    ${stageBlocks || '<span class="text-[9px] text-slate-300">No completed deliverables</span>'}
+                                </div>
+                                <div class="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+                                    ${legend}
+                                </div>
                             </div>`;
                         })()}
 
@@ -2094,7 +2269,7 @@ async function submitDelayReason(reminderId) {
                 </div>
             `;
 
-            const list = `<div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden"><div class="overflow-x-auto"><table class="w-full min-w-[900px] text-left"><thead class="bg-slate-50 border-b border-slate-200"><tr class="text-[10px] uppercase text-slate-400"><th class="px-4 py-3">Project</th><th class="px-4 py-3">Client</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Deliverables</th><th class="px-4 py-3">Content · Design · Animate</th><th class="px-4 py-3">Deadline</th><th class="px-4 py-3">Collaborators</th></tr></thead><tbody class="divide-y divide-slate-100">${campaigns.length ? campaigns.map(c => { const ds = DB.deliverables.filter(d => d.campaignId === c.id); return `<tr onclick="navigateTo('campaign-detail',{campaignId:'${c.id}'})" class="hover:bg-slate-50 cursor-pointer transition"><td class="px-4 py-4"><div class="font-bold text-sm text-slate-800">${c.name}</div><div class="text-[10px] text-slate-400">${c.id}</div></td><td class="px-4 py-4 text-xs text-slate-600">${getClient(c.clientId)?.name || 'Unknown'}</td><td class="px-4 py-4 text-xs font-bold">${c.status}</td><td class="px-4 py-4 font-bold text-sm text-slate-700">${ds.length}</td><td class="px-4 py-4 text-[10px] font-bold">${stageSummary(c)}</td><td class="px-4 py-4 text-xs text-slate-500">${dateText(c.deadline)}</td><td class="px-4 py-4"><div class="flex">${team(c)}</div></td></tr>`; }).join('') : `<tr><td colspan="7" class="p-10 text-center text-sm text-slate-400">No projects match the selected filters.</td></tr>`}</tbody></table></div></div>`;
+            const list = `<div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden"><div class="overflow-x-auto"><table class="w-full min-w-[900px] text-left"><thead class="bg-slate-50 border-b border-slate-200"><tr class="text-[10px] uppercase text-slate-400"><th class="px-4 py-3">Project</th><th class="px-4 py-3">Client</th><th class="px-4 py-3">Status</th><th class="px-4 py-3">Deliverables</th><th class="px-4 py-3">Content · Design · Animate</th><th class="px-4 py-3">Deadline</th><th class="px-4 py-3">Collaborators</th></tr></thead><tbody class="divide-y divide-slate-100">${campaigns.length ? campaigns.map(c => { const ds = DB.deliverables.filter(d => d.campaignId === c.id); return `<tr onclick="navigateTo('campaign-detail',{campaignId:'${c.id}'})" class="hover:bg-slate-50 cursor-pointer transition"><td class="px-4 py-4"><div class="font-bold text-sm text-slate-800">${c.name}</div><div class="text-[10px] text-slate-400">${c.id}</div></td><td class="px-4 py-4 text-xs text-slate-600">${getClient(c.clientId)?.name || 'Unknown'}</td><td class="px-4 py-4 text-xs font-bold">${c.status}</td><td class="px-4 py-4 font-bold text-sm text-slate-700">${ds.length}</td><td class="px-4 py-4 text-[10px] font-bold">${getCompletedDeliverableStageSummary(c)}</td><td class="px-4 py-4 text-xs text-slate-500">${dateText(c.deadline)}</td><td class="px-4 py-4"><div class="flex">${team(c)}</div></td></tr>`; }).join('') : `<tr><td colspan="7" class="p-10 text-center text-sm text-slate-400">No projects match the selected filters.</td></tr>`}</tbody></table></div></div>`;
 
             return `
                 <div class="max-w-[1400px] mx-auto">
@@ -2482,6 +2657,25 @@ async function submitDelayReason(reminderId) {
 
             const totalTasks = allTasks.length;
             const approvedTasks = allTasks.filter(t => t.status === 'APPROVED').length;
+            const gate = stageGateInfo(stage);
+            const gateReady = gate.total > 0 && gate.approved === gate.total;
+
+            // The UI must never show the contradictory state:
+            // "1/1 tasks approved" + "Client Decision Locked".
+            // If all tasks belonging to the current production/revision cycle
+            // are approved, the stage is READY FOR CLIENT DECISION. This also
+            // repairs an older/stale stage.status value that may still say ACTIVE.
+            if (stage.status !== 'COMPLETED' && gateReady && stage.status !== 'CLIENT_DECISION') {
+                stage.status = 'CLIENT_DECISION';
+                stage.reworkPending = false;
+                stage.sentToAdminForClientApproval = true;
+                persistStageV14(stage).catch(err => console.error('Failed to reconcile stage gate:', err));
+                const d = getDeliverable(stage.deliverableId);
+                if (d) {
+                    d.status = 'CLIENT_REVIEW';
+                    persistDeliverableV14(d).catch(err => console.error('Failed to reconcile deliverable gate:', err));
+                }
+            }
 
             // A completed stage is a completed stage regardless of who's
             // looking at it or whether they'd otherwise be allowed to manage
@@ -2529,7 +2723,7 @@ async function submitDelayReason(reminderId) {
             }
 
             let stageAlert = '';
-            const gi = stageGateInfo(stage);
+            const gi = gate;
 
             if (stage.status === 'CLIENT_DECISION') {
                 const countLabel = gi.isRevisionCycle
@@ -2593,8 +2787,9 @@ async function submitDelayReason(reminderId) {
             }
 
             // Keep Client Rework visually attached to the original task.
-            // A rework is still stored as a task record for workflow compatibility,
-            // but the manager UI presents it as a revision step under its main task.
+            // IMPORTANT: an APPROVED task from the CURRENT production/revision
+            // cycle is still current work until the client decision is recorded.
+            // It must not disappear into History merely because it was approved.
             const activeClientChanges = allTasks.filter(t => t.isClientChange && t.status !== 'APPROVED');
             const reworkParents = new Set();
             activeClientChanges.forEach(child => {
@@ -2604,11 +2799,19 @@ async function submitDelayReason(reminderId) {
                 if (parent) reworkParents.add(parent.id);
             });
 
+            // Current cycle = the work that gates THIS client decision.
+            // Initial production: all normal tasks.
+            // Revision N: only client-change tasks for Revision N.
+            const currentCycleTasks = gate.isRevisionCycle
+                ? allTasks.filter(t => t.isClientChange && t.clientRevision === gate.deliv.clientRevision)
+                : allTasks.filter(t => !t.isClientChange);
+
+            const currentCycleIds = new Set(currentCycleTasks.map(t => t.id));
             const currentWork = allTasks.filter(t =>
-                t.status !== 'APPROVED' || reworkParents.has(t.id)
+                currentCycleIds.has(t.id) || t.status !== 'APPROVED' || reworkParents.has(t.id)
             );
             const historyWork = allTasks.filter(t =>
-                t.status === 'APPROVED' && !reworkParents.has(t.id)
+                t.status === 'APPROVED' && !currentCycleIds.has(t.id) && !reworkParents.has(t.id)
             );
 
             // Group History by Client Revision - most recent first, with
@@ -2632,12 +2835,12 @@ async function submitDelayReason(reminderId) {
                     
                     <div class="flex justify-between items-center mb-4">
                         <div>
-                            <h3 class="text-lg font-bold text-slate-800">Current Work</h3>
-                            <p class="text-sm text-slate-500 mt-0.5">${gi.isRevisionCycle ? `Revision ${gi.deliv.clientRevision} — active change tasks` : 'Active tasks in the queue'}</p>
+                            <h3 class="text-lg font-bold text-slate-800">${stage.status === 'CLIENT_DECISION' ? 'Current Work — Awaiting Client Decision' : 'Current Work'}</h3>
+                            <p class="text-sm text-slate-500 mt-0.5">${stage.status === 'CLIENT_DECISION' ? (gi.isRevisionCycle ? `Revision ${gi.deliv.clientRevision} — all change work approved` : 'All internal work approved') : (gi.isRevisionCycle ? `Revision ${gi.deliv.clientRevision} — active change tasks` : 'Active tasks in the queue')}</p>
                         </div>
-                        <button onclick="openAddTaskModal('${stage.id}')" class="bg-brand text-white px-4 py-2 rounded shadow-sm text-sm font-medium hover:bg-brand/90 transition"><i class="fa-solid fa-plus mr-2"></i>Add Task</button>
+                        ${stage.status !== 'CLIENT_DECISION' ? `<button onclick="openAddTaskModal('${stage.id}')" class="bg-brand text-white px-4 py-2 rounded shadow-sm text-sm font-medium hover:bg-brand/90 transition"><i class="fa-solid fa-plus mr-2"></i>Add Task</button>` : ''}
                     </div>
-                    ${renderManagerTaskList(currentWork, false)}
+                    ${renderManagerTaskList(currentWork, stage.status === 'CLIENT_DECISION')}
 
                     ${historyWork.length > 0 ? `
                         <div class="mt-8 pt-8 border-t border-slate-200">
@@ -3119,7 +3322,17 @@ async function submitDelayReason(reminderId) {
             try {
                 await dbUpdate('pmt_tasks', taskId, { status: 'APPROVED' });
                 logActivity('TASK', task.id, 'Task internally approved');
-                recalculateStageGate(getStage(task.stageId));
+                const approvedStage = getStage(task.stageId);
+                recalculateStageGate(approvedStage);
+                if (approvedStage?.status === 'CLIENT_DECISION') {
+                    approvedStage.sentToAdminForClientApproval = true;
+                    await persistStageV14(approvedStage);
+                    const approvedDeliv = getDeliverable(approvedStage.deliverableId);
+                    if (approvedDeliv) {
+                        approvedDeliv.status = 'CLIENT_REVIEW';
+                        await persistDeliverableV14(approvedDeliv);
+                    }
+                }
                 showToast('Task internally approved.');
             } catch (error) {
                 task.status = previousStatus;
@@ -5191,6 +5404,7 @@ async function loginPMT(){
     renderAuthLoading('Signing in…');
     const {data,error}=await sb.auth.signInWithPassword({email,password});
     if(error){ renderAuthScreen('login',error.message,'error'); return; }
+    trackPostHog('user_signed_in', { method: 'password' });
     await startAuthenticatedPMT(data.user);
 }
 
@@ -5227,6 +5441,8 @@ async function registerPMT(){
 }
 
 async function signOutPMT(){
+    trackPostHog('user_signed_out');
+
     try { await sb.auth.signOut(); } catch(e){ console.error(e); }
     PMT_AUTH_USER=null;
     AppState.currentUser=null;
@@ -5240,6 +5456,9 @@ async function getAuthenticatedProfile(user){
 }
 
 async function startAuthenticatedPMT(user){
+    // Associate PostHog activity with the authenticated PMT user.
+    identifyPostHogUser(DB.users.find(u => u.authUserId === user?.id) || { authUserId: user?.id, email: user?.email });
+
     renderAuthLoading('Checking account approval…');
     try{
         const profile=await getAuthenticatedProfile(user);
